@@ -1,0 +1,13 @@
+<Configuration>
+    <Appenders>
+        <Console name="console" target="SYSTEM_OUT">
+            <!-- d{HH:mm:ss.SSS} -->
+            <PatternLayout pattern="%-5level %-15class - %msg%n" />
+        </Console>
+    </Appenders>
+    <Loggers>
+        <Root level="info">
+            <AppenderRef ref="console" />
+        </Root>
+    </Loggers>
+</Configuration>
