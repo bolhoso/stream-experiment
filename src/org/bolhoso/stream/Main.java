@@ -1,7 +1,6 @@
 package org.bolhoso.stream;
 
 import lombok.extern.slf4j.Slf4j;
-import org.bolhoso.stream.service.BrokerServer;
 
 import java.io.IOException;
 
@@ -9,7 +8,10 @@ import java.io.IOException;
 public class Main {
     public static void main(String[] args) throws IOException, InterruptedException {
         BrokerServer brokerServer = new BrokerServer();
-        brokerServer.start();
+        brokerServer.startProducerServer();
+
+        System.in.read();
+        brokerServer.stop();
 
         // TODO: create producer
         // TODO: create consumer
