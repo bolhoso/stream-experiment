@@ -11,7 +11,7 @@ import java.util.List;
 
 @Slf4j
 public class BrokerServer {
-    public static final int DEFAULT_PRODUCER_PORT = 9000;
+    public static final int DEFAULT_PORT = 9000;
 
     private ServerSocket producerServerSocket;
     private Thread producerServerThread;
@@ -24,7 +24,7 @@ public class BrokerServer {
 
     public BrokerServer() throws IOException {
         this.isRunning = false;
-        this.producerServerSocket = new ServerSocket(DEFAULT_PRODUCER_PORT);
+        this.producerServerSocket = new ServerSocket(DEFAULT_PORT);
 
         this.topicSubscriptionManager = new TopicSubscriptionManager();
         this.connectedProducers = new ArrayList<>();

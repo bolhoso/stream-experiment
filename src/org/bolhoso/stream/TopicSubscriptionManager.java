@@ -1,10 +1,13 @@
 package org.bolhoso.stream;
 
+import lombok.extern.slf4j.Slf4j;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 public class TopicSubscriptionManager {
     private Map<ClientConnection, String> topicProducers;
     private Map<String, List<ClientConnection>> topicConsumers;
@@ -18,8 +21,7 @@ public class TopicSubscriptionManager {
         if (producer.getClientType() != ClientType.PRODUCER) {
             return;
         }
-        // TODO: handle message
-        System.out.printf("Thread=%s Message received: %s\n", Thread.currentThread().getName(), message);
+        log.debug("[{}] Message received: {}", Thread.currentThread().getName(), message);
 
         String topic = this.topicProducers.get(producer);
         if (topic == null) {
@@ -27,8 +29,10 @@ public class TopicSubscriptionManager {
         }
 
         List<ClientConnection> consumers = this.topicConsumers.get(topic);
-        for (ClientConnection consumer : consumers) {
-            consumer.sendMessage(message);
+        if (consumers != null) {
+            for (ClientConnection consumer : consumers) {
+                consumer.sendMessage(message);
+            }
         }
     }
 
