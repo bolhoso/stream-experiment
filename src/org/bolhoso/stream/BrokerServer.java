@@ -55,7 +55,7 @@ public class BrokerServer {
     public void stop() {
         try {
             this.producerServerThread.interrupt();
-            this.connectedProducers.forEach(ClientConnection::stopHandler);
+            this.connectedProducers.forEach(ClientConnection::closeConnection);
             this.producerServerSocket.close();
         } catch (IOException e) {
             log.error("Error closing producer server socket", e);

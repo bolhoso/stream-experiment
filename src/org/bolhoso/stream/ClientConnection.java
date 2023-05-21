@@ -3,29 +3,31 @@ package org.bolhoso.stream;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintStream;
+import java.io.*;
 import java.net.Socket;
-import java.net.SocketException;
+import java.util.StringTokenizer;
+import java.util.UUID;
 
 @Slf4j
 public class ClientConnection extends Thread {
+    private static final long OFFSET_START = 0L;
+
+    private final TopicSubscriptionManager subscriptionManager;
+    private final MessageHandler messageHandler;
+
     private Socket socket;
-    private boolean isActive;
     private BufferedReader reader;
 
     @Getter private ClientType clientType;
-    @Getter private String subscribedTopic;
-    private TopicSubscriptionManager subscriptionManager;
 
-    public ClientConnection(final Socket s, final TopicSubscriptionManager subscriptionManager) throws IOException {
+    private PrintWriter writer;
+    private String clientId;
+
+    public ClientConnection(final Socket s, final TopicSubscriptionManager subscriptionManager, final MessageHandler messageHandler) {
         this.socket = s;
         this.subscriptionManager = subscriptionManager;
-        if (this.establishConnection()) {
-            this.start();
-        }
+        this.messageHandler = messageHandler;
+        this.start();
     }
 
     @Override
@@ -35,53 +37,100 @@ public class ClientConnection extends Thread {
             return;
         }
 
-        this.isActive = true;
-        while (isActive && this.socket.isConnected() && !Thread.currentThread().isInterrupted()) {
+        initializeConnection();
+        while (this.socket != null && this.socket.isConnected() && !Thread.currentThread().isInterrupted()) {
+            String dataRead = this.readData();
+            if (dataRead == null) {
+                log.info("Client disconnected");
+                this.closeConnection();
+                break;
+            }
+
             try {
-                if (!readData()) {
-                    log.info("Client disconnected");
-                    this.socket.close();
-                    this.closeSocket();
-                }
-            } catch (SocketException e) {
-                log.info("Client connection closed", e);
-                this.closeSocket();
-            } catch (IOException e) {
-                log.error("Error reading from socket", e);
-                this.closeSocket();
+                handleMessage(dataRead);
+            } catch (ClientNotRegisteredException e) {
+                this.sendProtocolError("Client not registered");
             }
         }
         log.info("Terminating BrokerClientHandler");
-        this.closeSocket();
+        this.closeConnection();
     }
 
-    private boolean establishConnection() throws IOException {
-        this.reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-
-        // First, read the type of client
-        String clientType = reader.readLine();
-        this.clientType = ClientType.valueOf(clientType);
-
-        // Now get the topic of interest
-        String topic = reader.readLine();
-        this.subscribedTopic = topic;
-        this.subscriptionManager.addSubscription(topic, this.clientType, this);
-
-        return true;
-    }
-
-    public void stopHandler() {
-        if (!isActive || this.socket.isClosed()) {
-            log.warn("Trying to stop an inactive handler");
-        } else {
-            try {
-                this.socket.close();
-            } catch (IOException e) {
-                log.warn("Error closing socket", e);
-            }
-            this.interrupt();
+    private void initializeConnection() {
+        try {
+            this.reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            this.writer = new PrintWriter(socket.getOutputStream());
+        } catch (IOException e) {
+            log.error("Error creating reader/writer", e);
+            this.closeConnection();
         }
-        this.closeSocket();
+    }
+
+    private void handleMessage(final String msg) throws ClientNotRegisteredException {
+        if (!msg.startsWith("/")) {
+            this.sendProtocolError("Invalid command");
+        }
+
+        StringTokenizer tokenizer = new StringTokenizer(msg, " ");
+        String command = tokenizer.nextToken();
+        switch(command) {
+            case "/hello":
+                this.clientType = ClientType.valueOf(tokenizer.nextToken());
+                if (tokenizer.hasMoreTokens()) {
+                    this.clientId = tokenizer.nextToken();
+                } else {
+                    this.clientId = UUID.randomUUID().toString().substring(0, 8);
+                }
+                this.subscriptionManager.registerClient(clientType, clientId);
+                break;
+
+            case "/topic":
+                checkClientRegistered();
+
+                long offset = OFFSET_START;
+                String topic = tokenizer.nextToken();
+                if (tokenizer.hasMoreTokens()) {
+                    offset = Long.parseLong(tokenizer.nextToken());
+                }
+                this.subscriptionManager.addSubscription(this.clientId, topic, offset, this.clientType, this);
+                break;
+
+            case "/send":
+                checkClientRegistered(ClientType.PRODUCER);
+
+                int payloadOffset = msg.lastIndexOf(' ');
+                this.messageHandler.receiveFromProducer(msg.substring(payloadOffset));
+                break;
+
+            case "/receive":
+                checkClientRegistered(ClientType.CONSUMER);
+
+                this.messageHandler.retrieveMessage();
+                break;
+
+            case "/close":
+                this.closeConnection();
+                break;
+
+            default:
+                this.sendProtocolError("Invalid command");
+        }
+    }
+
+    private void sendProtocolError(String message) {
+        this.writer.println("ERROR " + message);
+        this.writer.flush();
+    }
+
+    private void checkClientRegistered(final ClientType clientType) throws ClientNotRegisteredException {
+        boolean isCorrectClientType = clientType == null || this.clientType == clientType;
+        if (!subscriptionManager.isClientRegistered(this.clientId) && isCorrectClientType) {
+            throw new ClientNotRegisteredException();
+        }
+    }
+
+    private void checkClientRegistered() throws ClientNotRegisteredException {
+        checkClientRegistered(null);
     }
 
     public boolean sendMessage(final String data) {
@@ -101,20 +150,19 @@ public class ClientConnection extends Thread {
         return true;
     }
 
-    public void onDataReceived(final String line) {
-        this.subscriptionManager.messageReceived(this, line);
-    }
-
-    private boolean readData() throws IOException {
-        String line = reader.readLine();
-        while (line != null) {
-            this.onDataReceived(line);
-            line = reader.readLine();
+    private String readData() {
+        String payload = null;
+        try {
+            payload = reader.readLine();
+        } catch (IOException e) {
+            log.info("Client connection closed", e);
+            this.closeConnection();
         }
-        return false;
+
+        return payload;
     }
 
-    private void closeSocket() {
+    public void closeConnection() {
         if (this.socket != null && this.socket.isConnected()) {
             try {
                 this.socket.close();
@@ -122,7 +170,16 @@ public class ClientConnection extends Thread {
                 log.warn("Error closing socket", e);
             }
         }
+        if (this.reader != null) {
+            try {
+                this.reader.close();
+            } catch (IOException e) {
+            }
+        }
+
+        if (this.writer != null) {
+            this.writer.close();
+        }
         this.socket = null;
-        this.isActive = false;
     }
 }
